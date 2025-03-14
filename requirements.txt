@@ -1,0 +1,4 @@
+# requirements.txt
+httpx>=0.28.1
+mcp[cli]>=1.4.0
+python-dotenv>=1.0.0
