@@ -110,7 +110,27 @@ fofa_search_tool(query: str, fields: str = "", size: int = 50) -> dict
 }
 ```
 
-### 2. 查询账户信息
+### 2. FOFA 聚合查询
+
+```python
+fofa_stats_tool(query: str, aggs: str) -> dict
+```
+
+参数说明：
+
+- `query`: FOFA 查询语句
+- `aggs`: 聚合查询的字段，例如 `"country,port"`
+
+返回数据格式：
+
+```python
+{
+    "summary": str,  # 查询统计信息
+    "data": Dict[str, str]  # 聚合查询结果
+}
+```
+
+### 3. 查询账户信息
 
 ```python
 fofa_userinfo_tool() -> dict

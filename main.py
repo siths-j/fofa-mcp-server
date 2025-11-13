@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import base64
 import os
-from typing import Any, Coroutine, Dict
+from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -41,11 +41,6 @@ async def fofa_search(query: str, fields: str, size: int = 50) -> dict[str, Any]
         data = response.json()
         print(data)
         if data:
-            if data.get("error"):
-                data["results"] = [
-                    dict(zip(FOFA_FIELDS.split(","), item))
-                    for item in data["results"]
-                ]
             return data
         return None
     except httpx.HTTPError as e:
@@ -55,6 +50,58 @@ async def fofa_search(query: str, fields: str, size: int = 50) -> dict[str, Any]
         print(f"Error occurred: {e}")
         return None
     return None
+
+
+async def fofa_stats(query: str, aggs: str) -> dict[str, Any] | None:
+    """执行 FOFA 聚合查询"""
+    query_base64 = base64.b64encode(query.encode()).decode()
+    params = {
+        "key": FOFA_KEY,
+        "qbase64": query_base64,
+        "aggs": aggs
+    }
+    headers = {"Accept-Encoding": "gzip"}
+    URL = f"{FOFA_API_URL}/search/stats"
+    try:
+        response = await request_session.get(URL, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        if data:
+            return data
+        return None
+    except httpx.HTTPError as e:
+        print(f"HTTP error occurred: {e}")
+        return None
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        return None
+
+
+def format_stats_info(data: dict[str, Any]) -> dict[str, Any]:
+    """格式化聚合查询结果"""
+    if not data or data.get("error"):
+        return {"summary": f"聚合查询失败: {data.get('errmsg', '未知错误')}", "data": {}}
+
+    summary_list = [
+        f"查询语句: {data.get('query', '')}",
+        f"结果总数: {data.get('total', 0)}",
+        "---"
+    ]
+    # 使用 .get() 安全地访问 'aggregations'
+    aggregations = data.get('aggs', {})
+    if not aggregations:
+        summary_list.append("没有返回聚合结果。")
+
+    formatted_data = {}
+
+    for agg_name, buckets in aggregations.items():
+        summary_list.append(f"聚合字段: {agg_name}")
+        agg_results = []
+        for bucket in buckets:
+            agg_results.append(f"  - {bucket['name']}: {bucket['count']}")
+        formatted_data[agg_name] = "\n".join(agg_results)
+
+    return {"summary": "\n".join(summary_list), "data": formatted_data}
 
 
 def format_info(data: dict[str, Any], fields: str) -> dict[str, Any]:
@@ -73,65 +120,29 @@ def format_info(data: dict[str, Any], fields: str) -> dict[str, Any]:
         f"查询模式: {data.get('mode', 'extended')}",
         f"查询语句: {data.get('query', '')}"
     ]
-    formatted["summary"] = "\n".join(summary)
-    if data.get('error'):
-        return {"summary": "\n".join(summary) + f"\n错误提示: {data.get('errmsg', '未知错误')}", "data": []}
 
+    if data.get('error'):
+        summary.append(f"错误提示: {data.get('errmsg', '未知错误')}")
+        formatted["summary"] = "\n".join(summary)
+        return formatted
+
+    formatted["summary"] = "\n".join(summary)
     if not data.get('results'):
         return {"summary": "\n".join(summary) + "\n未找到匹配结果", "data": []}
 
-    result = data.get('results')
+    results = data.get('results', [])
 
-    for item in result:
-        if fields == 'all':
-            info = {
-                "IP": item[0],
-                "端口": item[1],
-                "协议": item[2],
-                "国家代码": item[3],
-                "国家名": item[4],
-                "地区": item[5],
-                "城市": item[6],
-                "经度": item[7],
-                "纬度": item[8],
-                "ASN编号": item[9],
-                "ASN组织": item[10],
-                "主机名": item[11],
-                "域名": item[12],
-                "操作系统": item[13],
-                "服务器": item[14],
-                "ICP备案号": item[15],
-                "网站标题": item[16],
-                "JARM指纹": item[17],
-                "Header": item[18],
-                "Banner": item[19],
-                "基础协议": item[20],
-                "URL链接": item[21],
-                "证书颁发者组织": item[22],
-                "证书颁发者通用名称": item[23],
-                "证书持有者组织": item[24],
-                "证书持有者通用名称": item[25],
-                "JA3S指纹": item[26],
-                "TLS版本": item[27],
-                "产品名": item[28],
-                "产品分类": item[29],
-                "版本号": item[30],
-                "最后更新时间": item[31],
-                "域名CNAME": item[32]
-            }
-        else:
-            info = {
-                "IP": item[0],
-                "端口": item[1],
-                "协议": item[2],
-                "主机名": item[3],
-                "域名": item[4],
-                "ICP备案号": item[5],
-                "网站标题": item[6],
-                "产品名": item[7],
-                "版本号": item[8],
-                "最后更新时间": item[9]
-            }
+    # 根据 "fields" 参数确定要使用的字段列表
+    field_list = []
+    if fields == 'all':
+        field_list = FOFA_FIELDS_ALL.split(',')
+    else:
+        # 默认使用 FOFA_FIELDS
+        field_list = FOFA_FIELDS.split(',')
+
+    for item in results:
+        # 动态地将字段和结果配对
+        info = dict(zip(field_list, item))
         formatted["data"].append(info)
 
     return formatted
@@ -157,14 +168,27 @@ async def fofa_userinfo() -> Any | None:
 
 
 @mcp.tool()
-async def fofa_search_tool(query: str, fields="", size: int = 50) -> dict[str, Any] | None:
+async def fofa_search_tool(query: str, fields: str = "", size: int = 50) -> dict[str, Any]:
     """ 使用 FOFA API 进行查询，返回更多字段信息 """
-    result = await fofa_search(query, fields, size, )
-    return format_info(result, fields) if result else None
+    result = await fofa_search(query, fields, size)
+    return format_info(result, fields) if result else {"summary": "查询失败", "data": []}
 
 
 @mcp.tool()
-async def fofa_userinfo_tool() -> Coroutine[Any, Any, Any | None]:
+async def fofa_stats_tool(query: str, aggs: str) -> dict[str, Any]:
+    """
+    使用 FOFA API 进行聚合查询。
+
+    :param query: FOFA 查询语句。
+    :param aggs: 聚合查询的字段，例如 "country,port"。
+    :return: 聚合查询结果。
+    """
+    result = await fofa_stats(query, aggs)
+    return format_stats_info(result) if result else {"summary": "聚合查询失败", "data": {}}
+
+
+@mcp.tool()
+async def fofa_userinfo_tool() -> dict[str, Any] | None:
     """ 查询 FOFA 账户信息 """
     return await fofa_userinfo()
 
